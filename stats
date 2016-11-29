@@ -1,0 +1,234 @@
+#!/bin/bash
+######################################################################
+# stats
+# Author: Greg Mankes
+#
+# Calculates the mean and median on either rows or columns
+######################################################################
+
+######################################################################
+# Rows
+#
+# Calculate the mean and median on the rows
+######################################################################
+rows(){
+    # if the file is empty (-s) or we dont have read permissions (-r)
+    # throw an error
+    if ! [[ -s $FILE_NAME ]]
+    then
+        echo "Error, File is empty" 1>&2
+        exit 1
+    elif ! [[ -r $FILE_NAME ]]
+    then
+        echo "Error, File unreadable" 1>&2
+        exit 1
+    fi
+    # if we are interrupted by signals, remove temp files and exit
+    trap "rm -f $$ datafile$$; exit 1" INT HUP TERM
+    
+    # Start to do calculations
+    echo "Means    Medians"
+    while read myline
+    do
+        # Take the line read in from FILE_NAME and re-orient it to be
+        # vertical and sorted in a temp file
+        for j in `echo $myline`
+        do
+            echo $j
+        done | sort -n > $$
+
+        # initialize loop counter and sum aggregator
+        sum=0
+        j=0
+
+        # for each line in the temp file, add the number to the sum
+        # and increment the loop counter (so we know how many numbers
+        # there are)
+        while read num
+        do
+            sum=`expr $sum + $num`
+            j=`expr $j + 1`
+        done <$$
+
+        # Calculate the mean using a half round formula
+        mean=`expr \( $sum + \( $j / 2 \) \) / $j`
+
+        # begin median calculation
+        # if the number of elements in the row is even:
+        if [ `expr $j % 2` -eq 0 ]
+        then
+            # get the two middle elements and take the greater of
+            # the two
+            mid=`expr $j / 2`
+            mid_1=`expr $mid + 1`
+            high=$(head -n $mid_1 $$ | tail -n 1)
+            low=$(head -n $mid $$ | tail -n 1)
+            if [ $high -gt $low ]
+            then
+                median=$high
+            else
+                median=$low
+            fi
+        else
+            # the number of elements in the row is odd,
+            # take the middle element
+            mid=`expr \( $j / 2 \) + 1`
+            median=$(head -n $mid $$ | tail -n 1)
+        fi
+        # print out this row's mean and median
+        echo "   $mean        $median"
+    done <$FILE_NAME
+}
+
+######################################################################
+# cols
+#
+# Calculate the mean and median on the columns
+######################################################################
+cols(){
+    # if the file is empty (-s) or we dont have read permissions (-r)
+    # throw an error
+    if ! [[ -s $FILE_NAME ]]
+    then
+        echo "Error, File is empty" 1>&2
+        exit 1
+    elif ! [[ -r $FILE_NAME ]]
+    then
+        echo "Error, File unreadable" 1>&2
+        exit 1
+    fi
+    # if we are interrupted by signals, remove temp files and exit
+    trap "rm -f $$ $temp datafile$$; exit 1" INT HUP TERM
+
+    # create a temp file to temporarily store the whole matrix
+    # this accounts for edge case with EOF's in the file
+    temp="cols$$"
+    while read myline
+    do
+        if [[ "$myline" != *"EOF"* ]]
+        then
+            echo $myline >> $temp
+        fi
+    done < $FILE_NAME
+
+    # get the number of columns so we know how many times to use cut
+    num_cols=$(awk '{print NF}' $temp | sort -nu | tail -n 1)
+
+    # begin calculations
+    i=1
+    means="Means"
+    medians="Medians"
+    # while our loop counter is less than the number of columns
+    while [ "$i" -le "$num_cols" ]
+    do
+        # cut the temp file we created based on a space delimeter and get
+        # the ith column. Sort this column and place it into a temp file
+        cut -f"$i" -d " " $temp | sort -n > $$
+
+        # initialize loop counter and sum aggregator
+        sum=0
+        j=0
+
+        # for each line in the temp file, add the number to the sum and
+        # increment the loop counter (so we know how many numbers there are
+        while read num
+        do
+            sum=`expr $sum + $num`
+            j=`expr $j + 1`
+        done <$$
+
+        # calulate the mean using a half round formula
+        mean=`expr \( $sum + \( $j / 2 \) \) / $j`
+
+        # append this mean to the end of the mean string to be printed
+        means="$means $mean"
+
+        # begin median calculation
+        # if the number of elements is even
+        if [ `expr $j % 2` -eq 0 ]
+        then
+            # get the two middle elements and take the greater of
+            # the two
+            mid=`expr $j / 2`
+            mid_1=`expr $mid + 1`
+            high=$(head -n $mid_1 $$ | tail -n 1)
+            low=$(head -n $mid $$ | tail -n 1)
+            if [ $high -gt $low ]
+            then
+                median=$high
+            else
+                median=$low
+            fi
+        else
+            # the number of elements is odd, so grab the middle element
+            # for the median
+            mid=`expr \( $j / 2 \) + 1`
+            median=$(head -n $mid $$ | tail -n 1)
+        fi
+        # append the median to the end of the median string
+        medians="$medians $median"
+
+        # increment the loop counter (ith column we're on)
+        i=`expr $i + 1`
+    done
+    # print mean and median string
+    echo $means
+    echo $medians
+    # remove column specific temp file
+    rm $temp
+}
+
+# initialize a datafile path as a temp number
+datafilepath="datafile$$"
+
+# if the number of arguments is 1
+if [ "$#" = "1" ]
+then
+    # dump standard input into a temp file and set the file name to be
+    # that temp file (happens when we pipe values into stats)
+    cat > "$datafilepath"
+    FILE_NAME=$datafilepath
+
+    # if the first argument starts with r
+    if [[ $1 == "-r"* ]]
+    then
+        # call the rows function
+        echo "calculating row stats"
+        rows
+    elif [[ $1 == "-c"* ]] # if it starts with c
+    then
+        # call cols
+        echo "calculating column stats"
+        cols
+    else # invalid syntax, throw error
+        echo 'Usage: stats {-rows|-cols} [file]' 1>&2
+        rm $datafilepath
+        exit 1
+    fi
+    rm $datafilepath
+elif [ "$#" = "2" ] # if the number of arguments is 2
+then
+    # set the file name to be the second argument
+    FILE_NAME=$2
+
+    # if the first argument starts with r
+    if [[ $1 == "-r"* ]]
+    then
+        # call rows
+        echo "calculating row stats"
+        rows
+    elif [[ $1 == "-c"* ]] # if the first argument starts with c
+    then
+        echo "calculating column stats"
+        cols
+    else # invalid syntax, throw error
+        echo 'Usage: stats {-rows|-cols} [file]' 1>&2
+        exit 1
+    fi
+else # invalid syntax, throw error
+    echo 'Usage: stats {-rows|-cols} [file]' 1>&2
+    exit 1
+fi
+
+# remove common temp file
+rm $$
